@@ -242,12 +242,13 @@ final class BodyParsingMiddleware implements MiddlewareInterface
     {
         $body = $part->getDecodedBody();
         $stream = $this->streamFactory->createStream($body);
+        $filename = $part->getFilename();
 
         return $this->uploadedFileFactory->createUploadedFile(
             $stream,
             $stream->getSize(),
-            UPLOAD_ERR_OK,
-            $part->getFilename(),
+            $filename === '' ? UPLOAD_ERR_NO_FILE : UPLOAD_ERR_OK,
+            $filename,
             $part->getContentType(),
         );
     }
@@ -306,8 +307,13 @@ final class BodyParsingMiddleware implements MiddlewareInterface
      */
     private function assignNestedValue(array &$target, string $name, mixed $value): void
     {
+        $name = ltrim($name, ' ');
+        if ($name === '') {
+            return;
+        }
+
         if (!str_contains($name, '[')) {
-            $target[$name] = $value;
+            $target[strtr($name, '. ', '__')] = $value;
 
             return;
         }
@@ -319,6 +325,7 @@ final class BodyParsingMiddleware implements MiddlewareInterface
             return;
         }
 
+        $base[1] = strtr($base[1], '. ', '__');
         preg_match_all('/\[([^]]*)]/', $name, $keys);
 
         $current = &$target;

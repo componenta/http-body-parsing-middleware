@@ -6,6 +6,8 @@ Use this package in HTTP applications that need parsed bodies for methods and co
 
 ## Installation
 
+Requires PHP 8.4+ with the mbstring extension for filename encoding conversion.
+
 ```bash
 composer require componenta/http-body-parsing-middleware
 ```
@@ -30,6 +32,10 @@ The middleware skips requests when:
 - PHP has already parsed a native `POST` form or multipart request.
 
 Scalar JSON values are preserved under the `__scalar` key because PSR-7 parsed bodies must be `null`, array, or object.
+
+Multipart field and upload names follow PHP naming rules: leading spaces are removed and dots/spaces in the root name become underscores. Nested keys keep their original spelling.
+
+Run the package tests with `composer test` after installing development dependencies.
 
 ## Public Classes
 
