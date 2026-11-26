@@ -5,7 +5,7 @@ on:
     branches:
       - fix/middleware-security-audit
     paths:
-      - 'benchmarks/comparison/**'
+      - 'integration/comparison/**'
       - '.github/workflows/comparison.yml'
   workflow_dispatch:
 
@@ -85,11 +85,11 @@ jobs:
           coverage: none
           extensions: mbstring, ctype, dom
           tools: composer:2.9.8@sha256:59b2c50e10cafa0d8efc19ede9a326d782f096c674a26baf98cf042ce23de890
-      - run: composer update --working-dir=benchmarks/comparison --no-interaction --prefer-dist --no-progress
-      - run: composer audit --working-dir=benchmarks/comparison
+      - run: composer update --working-dir=integration/comparison --no-interaction --prefer-dist --no-progress
+      - run: composer audit --working-dir=integration/comparison
       - name: Baseline
-        working-directory: benchmarks/comparison
+        working-directory: integration/comparison
         run: vendor/bin/phpbench run --config=baseline.json --report=aggregate --report=env
       - name: Candidate
-        working-directory: benchmarks/comparison
+        working-directory: integration/comparison
         run: vendor/bin/phpbench run --config=candidate.json --report=aggregate --report=env

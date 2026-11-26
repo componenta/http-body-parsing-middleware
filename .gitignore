@@ -9,5 +9,5 @@ integration/composer.lock
 /integration/vendor/
 /integration/composer.lock
 /comparison-sources/
-/benchmarks/comparison/vendor/
-/benchmarks/comparison/composer.lock
+/integration/comparison/vendor/
+/integration/comparison/composer.lock
