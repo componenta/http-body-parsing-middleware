@@ -12,6 +12,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UploadedFileFactoryInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use Psr\Http\Server\MiddlewareInterface;
@@ -56,17 +57,15 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
             if (preg_match("@^[!#$%&'*+.^_\x60|~0-9a-z-]+/[!#$%&'*+.^_\x60|~0-9a-z-]+$@D", $mediaType) !== 1) {
                 throw BodyParsingException::malformed('Invalid Content-Type.');
             }
-            if (!in_array($mediaType, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'], true)
-                || ($mediaType === 'multipart/form-data' && $request->getUploadedFiles() !== [])) {
-                return $handler->handle($request);
-            }
-            [$request, $body] = $this->readBody($request);
-            if ($body !== '') {
-                $request = match ($mediaType) {
-                    'application/json' => $this->parseJson($request, $body),
-                    'application/x-www-form-urlencoded' => $this->parseForm($request, $body),
-                    'multipart/form-data' => $this->parseMultipart($request, $body),
-                };
+            if ($mediaType === 'multipart/form-data' && $request->getUploadedFiles() === []) {
+                $request = $this->parseMultipart($request);
+            } elseif (in_array($mediaType, ['application/json', 'application/x-www-form-urlencoded'], true)) {
+                [$request, $body] = $this->readBody($request);
+                if ($body !== '') {
+                    $request = $mediaType === 'application/json'
+                        ? $this->parseJson($request, $body)
+                        : $this->parseForm($request, $body);
+                }
             }
         } catch (BodyParsingException $exception) {
             if ($this->responseFactory === null) {
@@ -122,41 +121,108 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         return $request->withParsedBody($data);
     }
 
-    private function parseMultipart(ServerRequestInterface $request, string $body): ServerRequestInterface
+    private function parseMultipart(ServerRequestInterface $request): ServerRequestInterface
     {
         $boundary = $this->multipartParser->extractBoundary($request->getHeaderLine('Content-Type'));
         if ($boundary === null) {
             throw BodyParsingException::malformed('Multipart boundary is required.');
         }
-        $parts = $this->multipartParser->parse($body, $boundary);
-        if (count($parts) > $this->limits->maxParts) {
-            throw BodyParsingException::tooLarge('Too many multipart parts.');
+        $source = $request->getBody();
+        $size = $source->getSize();
+        if ($size !== null && $size > $this->limits->maxBodyBytes) {
+            throw BodyParsingException::tooLarge('Request body exceeds configured limit.');
+        }
+        $position = null;
+        $replay = null;
+        if ($source->isSeekable()) {
+            $position = $source->tell();
+            $source->rewind();
+        } else {
+            $replay = $this->copyBodyToTemporaryStream($source);
+            $source = $replay;
         }
         $fields = [];
         $files = [];
-        foreach ($parts as $part) {
-            $name = $part->getName();
-            if ($name === null) {
-                throw BodyParsingException::malformed('Multipart field name is required.');
+        try {
+            foreach ($this->multipartParser->parseStream($source, $boundary, $this->streamFactory, $this->limits) as [$part, $stream]) {
+                $name = $part->getName();
+                if ($name === null) {
+                    $stream->close();
+                    throw BodyParsingException::malformed('Multipart field name is required.');
+                }
+                $encoding = strtolower($part->headers['content-transfer-encoding'] ?? 'binary');
+                if (!in_array($encoding, ['7bit', '8bit', 'binary'], true)) {
+                    // Legacy transfer encodings remain supported; only these
+                    // individual bounded parts require materialization.
+                    try {
+                        $decoded = (new MultipartPart($part->headers, $stream->getContents()))->getDecodedBody();
+                    } finally {
+                        $stream->close();
+                    }
+                    if (strlen($decoded) > $this->limits->maxPartBytes) {
+                        throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
+                    }
+                    $stream = $this->streamFactory->createStream($decoded);
+                }
+                if ($part->isFile()) {
+                    $this->assign($files, $name, $this->createUpload($part, $stream), true);
+                } else {
+                    try {
+                        $this->assign($fields, $name, $stream->getContents(), false);
+                    } finally {
+                        $stream->close();
+                    }
+                }
             }
-            $decoded = $part->getDecodedBody();
-            if (strlen($decoded) > $this->limits->maxPartBytes) {
-                throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
+            if ($replay !== null) {
+                $replay->rewind();
+                $request = $request->withBody($replay);
             }
-            if ($part->isFile()) {
-                $this->assign($files, $name, $this->createUpload($part, $decoded), true);
-            } else {
-                $this->assign($fields, $name, $decoded, false);
+        } finally {
+            if ($position !== null) {
+                $source->seek($position);
             }
         }
         $request = $request->withParsedBody($fields);
         return $files === [] ? $request : $request->withUploadedFiles($files);
     }
 
-    private function createUpload(MultipartPart $part, string $data): UploadedFileInterface
+    private function copyBodyToTemporaryStream(StreamInterface $source): StreamInterface
+    {
+        $resource = fopen('php://temp/maxmemory:65536', 'w+b');
+        if ($resource === false) {
+            throw new \RuntimeException('Could not create request replay stream.');
+        }
+        try {
+            $size = 0;
+            while (!$source->eof()) {
+                $chunk = $source->read(min(8192, $this->limits->maxBodyBytes - $size + 1));
+                if ($chunk === '' && !$source->eof()) {
+                    throw BodyParsingException::malformed('Request body stream made no progress.');
+                }
+                $size += strlen($chunk);
+                if ($size > $this->limits->maxBodyBytes) {
+                    throw BodyParsingException::tooLarge('Request body exceeds configured limit.');
+                }
+                if ($chunk !== '' && fwrite($resource, $chunk) !== strlen($chunk)) {
+                    throw new \RuntimeException('Could not write request replay stream.');
+                }
+            }
+            if (!rewind($resource)) {
+                throw new \RuntimeException('Could not rewind request replay stream.');
+            }
+            return $this->streamFactory->createStreamFromResource($resource);
+        } catch (\Throwable $exception) {
+            if (is_resource($resource)) {
+                fclose($resource);
+            }
+            throw $exception;
+        }
+    }
+
+    private function createUpload(MultipartPart $part, StreamInterface $stream): UploadedFileInterface
     {
         $filename = $part->getFilename();
-        $stream = $this->streamFactory->createStream($data);
         return $this->uploadedFileFactory->createUploadedFile(
             $stream,
             $stream->getSize(),
