@@ -18,7 +18,8 @@ final readonly class BodyParsingLimits
                 throw new \InvalidArgumentException('Body parsing limits must be positive.');
             }
         }
-        if ($maxNestingDepth > 512 || $maxBodyBytes >= PHP_INT_MAX) {
+        if ($maxNestingDepth > 512 || $maxBodyBytes >= PHP_INT_MAX
+            || $maxPartBytes > PHP_INT_MAX - 4 || $maxHeaderBytes > PHP_INT_MAX - 4 || $maxParts >= PHP_INT_MAX) {
             throw new \InvalidArgumentException('Body parsing limits exceed supported bounds.');
         }
     }

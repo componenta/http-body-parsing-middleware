@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Componenta\Http\Middleware;
 
+use Componenta\Http\Middleware\Body\HeaderParameters;
 use Componenta\Http\Middleware\Body\MultipartParser;
 use Componenta\Http\Middleware\Body\MultipartPart;
 use JsonException;
@@ -39,14 +40,25 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         if ($request->getParsedBody() !== null || in_array($request->getMethod(), ['GET', 'HEAD', 'OPTIONS', 'TRACE'], true)) {
             return $handler->handle($request);
         }
-        $mediaType = strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0]));
-        if (!in_array($mediaType, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'], true)
-            || ($mediaType === 'multipart/form-data' && $request->getUploadedFiles() !== [])) {
+        if (!$request->hasHeader('Content-Type')) {
             return $handler->handle($request);
         }
         try {
-            if (count($request->getHeader('Content-Type')) !== 1) {
+            $contentTypes = $request->getHeader('Content-Type');
+            if (count($contentTypes) !== 1) {
                 throw BodyParsingException::malformed('Ambiguous Content-Type.');
+            }
+            $contentType = $contentTypes[0];
+            if (strlen($contentType) > $this->limits->maxHeaderBytes) {
+                throw BodyParsingException::tooLarge('Content-Type exceeds configured limit.');
+            }
+            [$mediaType] = HeaderParameters::parse($contentType);
+            if (preg_match("@^[!#$%&'*+.^_\x60|~0-9a-z-]+/[!#$%&'*+.^_\x60|~0-9a-z-]+$@D", $mediaType) !== 1) {
+                throw BodyParsingException::malformed('Invalid Content-Type.');
+            }
+            if (!in_array($mediaType, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'], true)
+                || ($mediaType === 'multipart/form-data' && $request->getUploadedFiles() !== [])) {
+                return $handler->handle($request);
             }
             [$request, $body] = $this->readBody($request);
             if ($body !== '') {
@@ -86,13 +98,14 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
     private function parseForm(ServerRequestInterface $request, string $body): ServerRequestInterface
     {
         $separators = ini_get('arg_separator.input') ?: '&';
-        $fields = preg_split('/[' . preg_quote($separators, '/') . ']/', $body);
+        $nativeMax = (int) ini_get('max_input_vars');
+        $nativeDepth = (int) ini_get('max_input_nesting_level');
+        $maxFields = $nativeMax > 0 ? min($this->limits->maxParts, $nativeMax) : $this->limits->maxParts;
+        $fields = preg_split('/[' . preg_quote($separators, '/') . ']/', $body, $maxFields + 1);
         if ($fields === false) {
             throw BodyParsingException::malformed('Invalid form body.');
         }
-        $nativeMax = (int) ini_get('max_input_vars');
-        $nativeDepth = (int) ini_get('max_input_nesting_level');
-        if (count($fields) > $this->limits->maxParts || ($nativeMax > 0 && count($fields) > $nativeMax)) {
+        if (count($fields) > $maxFields) {
             throw BodyParsingException::tooLarge('Too many form fields.');
         }
         foreach ($fields as $field) {

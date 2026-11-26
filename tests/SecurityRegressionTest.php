@@ -79,6 +79,29 @@ final class SecurityRegressionTest extends TestCase
         self::assertSame('b', $uploads[1]->getClientFilename());
     }
 
+    public function testAmbiguousContentTypeIsRejected(): void
+    {
+        $factory = new Psr17Factory();
+        $handler = $this->handler();
+        $middleware = new BodyParsingMiddleware($factory, $factory, responseFactory: $factory);
+        foreach (['application/json, text/plain', ['application/json', 'text/plain']] as $value) {
+            $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', $value);
+            self::assertSame(400, $middleware->process($request, $handler)->getStatusCode());
+        }
+        self::assertNull($handler->request);
+    }
+
+    public function testFormFieldLimitIsEnforcedBeforeParsing(): void
+    {
+        $factory = new Psr17Factory();
+        $handler = $this->handler();
+        $middleware = new BodyParsingMiddleware($factory, $factory, limits: new BodyParsingLimits(maxParts: 2), responseFactory: $factory);
+        $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', 'application/x-www-form-urlencoded')
+            ->withBody($factory->createStream('a=1&b=2&c=3'));
+        self::assertSame(413, $middleware->process($request, $handler)->getStatusCode());
+        self::assertNull($handler->request);
+    }
+
     private function handler(): RequestHandlerInterface
     {
         return new class implements RequestHandlerInterface {

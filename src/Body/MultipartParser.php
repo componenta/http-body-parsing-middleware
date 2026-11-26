@@ -41,7 +41,7 @@ final readonly class MultipartParser
             if ($end < $offset) {
                 throw BodyParsingException::malformed('Invalid multipart part.');
             }
-            if ($end - $offset > $this->limits->maxPartBytes + $this->limits->maxHeaderBytes + 4.0) {
+            if ($end - $offset - $this->limits->maxPartBytes > $this->limits->maxHeaderBytes + 4) {
                 throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
             }
             $parts[] = $this->parsePart(substr($body, $offset, $end - $offset));
