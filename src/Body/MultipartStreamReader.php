@@ -168,6 +168,10 @@ final class MultipartStreamReader
             if ($line === "\r\n" || $line === "\n") {
                 break;
             }
+            $lineContent = substr($line, 0, str_ends_with($line, "\r\n") ? -2 : -1);
+            if (str_contains($lineContent, "\r")) {
+                throw BodyParsingException::malformed('Invalid carriage return in multipart header.');
+            }
             if (strlen($line) > $this->limits->maxHeaderBytes - strlen($block)) {
                 throw BodyParsingException::tooLarge('Multipart headers exceed configured limit.');
             }

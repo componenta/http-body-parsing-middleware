@@ -143,4 +143,20 @@ final class MultipartStreamingTest extends TestCase
         $this->expectException(BodyParsingException::class);
         (new MultipartParser())->parse("--b\r\nContent-Disposition: form-data; name=x\r\r\n\r\nabc\r\n--b--\r\n", 'b');
     }
+
+    public function testUnselectedFileWithContentIsRejected(): void
+    {
+        $factory = new Psr17Factory();
+        $body = "--b\r\nContent-Disposition: form-data; name=file; filename=\"\"\r\n\r\nDATA\r\n--b--\r\n";
+        $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', 'multipart/form-data; boundary=b')
+            ->withBody($factory->createStream($body));
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                throw new \LogicException('Malformed file input must not reach the handler.');
+            }
+        };
+        $middleware = new BodyParsingMiddleware($factory, $factory, responseFactory: $factory);
+        self::assertSame(400, $middleware->process($request, $handler)->getStatusCode());
+    }
 }

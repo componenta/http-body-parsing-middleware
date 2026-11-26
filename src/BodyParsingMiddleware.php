@@ -99,7 +99,7 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         $separators = ini_get('arg_separator.input') ?: '&';
         $nativeMax = (int) ini_get('max_input_vars');
         $nativeDepth = (int) ini_get('max_input_nesting_level');
-        $maxFields = $nativeMax > 0 ? min($this->limits->maxParts, $nativeMax) : $this->limits->maxParts;
+        $maxFields = $nativeMax >= 0 ? min($this->limits->maxParts, $nativeMax) : $this->limits->maxParts;
         $fields = preg_split('/[' . preg_quote($separators, '/') . ']/', $body, $maxFields + 1);
         if ($fields === false) {
             throw BodyParsingException::malformed('Invalid form body.');
@@ -113,7 +113,7 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
                 throw BodyParsingException::malformed('Invalid form field name.');
             }
             $depth = substr_count($name, '[');
-            if ($depth > $this->limits->maxNestingDepth || ($nativeDepth > 0 && $depth > $nativeDepth)) {
+            if ($depth > $this->limits->maxNestingDepth || ($nativeDepth >= 0 && $depth > $nativeDepth)) {
                 throw BodyParsingException::tooLarge('Form nesting exceeds configured limit.');
             }
         }
@@ -143,48 +143,79 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         }
         $fields = [];
         $files = [];
+        $ownedUploads = [];
         try {
-            foreach ($this->multipartParser->parseStream($source, $boundary, $this->streamFactory, $this->limits) as [$part, $stream]) {
-                $name = $part->getName();
-                if ($name === null) {
-                    $stream->close();
-                    throw BodyParsingException::malformed('Multipart field name is required.');
-                }
-                $encoding = strtolower($part->headers['content-transfer-encoding'] ?? 'binary');
-                if (!in_array($encoding, ['7bit', '8bit', 'binary'], true)) {
-                    // Legacy transfer encodings remain supported; only these
-                    // individual bounded parts require materialization.
+            try {
+                foreach ($this->multipartParser->parseStream($source, $boundary, $this->streamFactory, $this->limits) as [$part, $stream]) {
+                    $transferred = false;
                     try {
-                        $decoded = (new MultipartPart($part->headers, $stream->getContents()))->getDecodedBody();
+                        $name = $part->getName();
+                        if ($name === null) {
+                            throw BodyParsingException::malformed('Multipart field name is required.');
+                        }
+                        if (ltrim($name, ' ') === '') {
+                            continue;
+                        }
+                        $filename = $part->getFilename();
+                        $encoding = strtolower($part->headers['content-transfer-encoding'] ?? 'binary');
+                        if (!in_array($encoding, ['7bit', '8bit', 'binary'], true)) {
+                            // Legacy transfer encodings remain supported; only
+                            // these individual bounded parts materialize.
+                            $decoded = (new MultipartPart($part->headers, $stream->getContents()))->getDecodedBody();
+                            if (strlen($decoded) > $this->limits->maxPartBytes) {
+                                throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
+                            }
+                            $decodedStream = $this->streamFactory->createStream($decoded);
+                            $stream->close();
+                            $stream = $decodedStream;
+                        }
+                        if ($filename !== null) {
+                            if ($filename === '' && $stream->read(1) !== '') {
+                                throw BodyParsingException::malformed('An unselected file input must have an empty body.');
+                            }
+                            $upload = $this->createUpload($filename, $part->getContentType(), $stream);
+                            $this->assign($files, $name, $upload, true);
+                            $ownedUploads[] = $stream;
+                            $transferred = true;
+                        } else {
+                            $this->assign($fields, $name, $stream->getContents(), false);
+                        }
                     } finally {
-                        $stream->close();
+                        if (!$transferred) {
+                            $stream->close();
+                        }
                     }
-                    if (strlen($decoded) > $this->limits->maxPartBytes) {
-                        throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
-                    }
-                    $stream = $this->streamFactory->createStream($decoded);
                 }
-                if ($part->isFile()) {
-                    $this->assign($files, $name, $this->createUpload($part, $stream), true);
-                } else {
-                    try {
-                        $this->assign($fields, $name, $stream->getContents(), false);
-                    } finally {
-                        $stream->close();
-                    }
+            } finally {
+                if ($position !== null) {
+                    $source->seek($position);
                 }
             }
             if ($replay !== null) {
                 $replay->rewind();
                 $request = $request->withBody($replay);
             }
-        } finally {
-            if ($position !== null) {
-                $source->seek($position);
+            $request = $request->withParsedBody($fields);
+            return $files === [] ? $request : $request->withUploadedFiles($files);
+        } catch (\Throwable $exception) {
+            // No request reached the application. Do not rely on a particular
+            // PSR-7 implementation's destructors to release temporary files.
+            foreach ($ownedUploads as $uploadStream) {
+                try {
+                    $uploadStream->close();
+                } catch (\Throwable) {
+                    // Preserve the original failure while releasing other streams.
+                }
             }
+            if ($replay !== null) {
+                try {
+                    $replay->close();
+                } catch (\Throwable) {
+                    // Preserve the original failure.
+                }
+            }
+            throw $exception;
         }
-        $request = $request->withParsedBody($fields);
-        return $files === [] ? $request : $request->withUploadedFiles($files);
     }
 
     private function copyBodyToTemporaryStream(StreamInterface $source): StreamInterface
@@ -223,15 +254,14 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         }
     }
 
-    private function createUpload(MultipartPart $part, StreamInterface $stream): UploadedFileInterface
+    private function createUpload(string $filename, string $contentType, StreamInterface $stream): UploadedFileInterface
     {
-        $filename = $part->getFilename();
         return $this->uploadedFileFactory->createUploadedFile(
             $stream,
             $stream->getSize(),
             $filename === '' ? UPLOAD_ERR_NO_FILE : UPLOAD_ERR_OK,
             $filename,
-            $part->getContentType(),
+            $contentType,
         );
     }
 
