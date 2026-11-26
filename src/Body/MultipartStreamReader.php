@@ -156,7 +156,9 @@ final class MultipartStreamReader
         $block = '';
         while (true) {
             while (($end = strpos($this->buffer, "\n")) === false) {
-                if (strlen($this->buffer) > $this->limits->maxHeaderBytes - strlen($block)) {
+                // A lone CR may be the beginning of the empty terminating
+                // line, which does not count toward the header byte limit.
+                if ($this->buffer !== "\r" && strlen($this->buffer) > $this->limits->maxHeaderBytes - strlen($block)) {
                     throw BodyParsingException::tooLarge('Multipart headers exceed configured limit.');
                 }
                 if (!$this->fill()) {
