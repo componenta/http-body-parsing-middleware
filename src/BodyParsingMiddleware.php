@@ -195,10 +195,13 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         }
         try {
             $size = 0;
-            while (!$source->eof()) {
+            while (true) {
                 $chunk = $source->read(min(8192, $this->limits->maxBodyBytes - $size + 1));
-                if ($chunk === '' && !$source->eof()) {
-                    throw BodyParsingException::malformed('Request body stream made no progress.');
+                if ($chunk === '') {
+                    if (!$source->eof()) {
+                        throw BodyParsingException::malformed('Request body stream made no progress.');
+                    }
+                    break;
                 }
                 $size += strlen($chunk);
                 if ($size > $this->limits->maxBodyBytes) {
@@ -247,11 +250,14 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         }
         $body = '';
         try {
-            while (!$stream->eof()) {
+            while (true) {
                 $remaining = $this->limits->maxBodyBytes - strlen($body);
                 $chunk = $stream->read(min(8192, $remaining + 1));
-                if ($chunk === '' && !$stream->eof()) {
-                    throw BodyParsingException::malformed('Request body stream made no progress.');
+                if ($chunk === '') {
+                    if (!$stream->eof()) {
+                        throw BodyParsingException::malformed('Request body stream made no progress.');
+                    }
+                    break;
                 }
                 $body .= $chunk;
                 if (strlen($body) > $this->limits->maxBodyBytes) {
@@ -289,6 +295,7 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         $current = &$target;
         foreach ($keys as $key) {
             if ($key === '') {
+                $this->ensureAppendable($current);
                 $current[] = [];
                 $key = array_key_last($current);
             }
@@ -301,18 +308,27 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
             $current = &$current[$key];
         }
         if ($leaf === '') {
+            $this->ensureAppendable($current);
             $current[] = $value;
         } elseif ($upload && isset($current[$leaf])) {
             $existing = $current[$leaf];
             if ($existing instanceof UploadedFileInterface) {
                 $current[$leaf] = [$existing, $value];
             } elseif (is_array($existing) && array_is_list($existing) && array_all($existing, static fn(mixed $item): bool => $item instanceof UploadedFileInterface)) {
+                $this->ensureAppendable($current[$leaf]);
                 $current[$leaf][] = $value;
             } else {
                 throw BodyParsingException::malformed('Conflicting multipart upload field shapes.');
             }
         } else {
             $current[$leaf] = $value;
+        }
+    }
+    /** @param array<array-key, mixed> $values */
+    private function ensureAppendable(array $values): void
+    {
+        if (array_key_exists(PHP_INT_MAX, $values)) {
+            throw BodyParsingException::malformed('Multipart numeric field index exceeds supported range.');
         }
     }
 }

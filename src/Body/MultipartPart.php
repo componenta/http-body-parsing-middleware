@@ -74,7 +74,11 @@ final readonly class MultipartPart
             if (!mb_check_encoding($decoded, $parts[0])) {
                 throw BodyParsingException::malformed('Invalid extended multipart filename encoding.');
             }
-            return mb_convert_encoding($decoded, 'UTF-8', $parts[0]);
+            $converted = mb_convert_encoding($decoded, 'UTF-8', $parts[0]);
+            if ($converted === false) {
+                throw BodyParsingException::malformed('Could not convert extended multipart filename.');
+            }
+            return $converted;
         } catch (\ValueError $exception) {
             throw BodyParsingException::malformed('Invalid extended multipart filename charset.', $exception);
         }

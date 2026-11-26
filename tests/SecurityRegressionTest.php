@@ -102,6 +102,19 @@ final class SecurityRegressionTest extends TestCase
         self::assertNull($handler->request);
     }
 
+    public function testOverflowingImplicitArrayIndexIsRejected(): void
+    {
+        $factory = new Psr17Factory();
+        $handler = $this->handler();
+        $middleware = new BodyParsingMiddleware($factory, $factory, responseFactory: $factory);
+        $body = "--b\r\nContent-Disposition: form-data; name=\"x[" . PHP_INT_MAX . "]\"\r\n\r\nA\r\n"
+            . "--b\r\nContent-Disposition: form-data; name=\"x[]\"\r\n\r\nB\r\n--b--\r\n";
+        $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', 'multipart/form-data; boundary=b')
+            ->withBody($factory->createStream($body));
+        self::assertSame(400, $middleware->process($request, $handler)->getStatusCode());
+        self::assertNull($handler->request);
+    }
+
     private function handler(): RequestHandlerInterface
     {
         return new class implements RequestHandlerInterface {

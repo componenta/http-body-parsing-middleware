@@ -66,9 +66,6 @@ final readonly class MultipartParser
             maxNestingDepth: min($this->limits->maxNestingDepth, $outerLimits->maxNestingDepth),
         );
         $reader = new MultipartStreamReader(static function (int $length) use ($source): string {
-            if ($source->eof()) {
-                return '';
-            }
             $chunk = $source->read($length);
             if ($chunk === '' && !$source->eof()) {
                 throw BodyParsingException::malformed('Request body stream made no progress.');
