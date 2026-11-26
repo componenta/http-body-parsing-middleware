@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 final class MultipartStreamingTest extends TestCase
@@ -96,5 +97,50 @@ final class MultipartStreamingTest extends TestCase
         $upload = $handler->request->getUploadedFiles()['file'];
         self::assertSame(strlen($data), $upload->getSize());
         self::assertSame($data, $upload->getStream()->getContents());
+    }
+
+    public function testFailureClosesAlreadyCreatedUploadStreams(): void
+    {
+        $factory = new Psr17Factory();
+        $streams = new class($factory) implements StreamFactoryInterface {
+            /** @var list<StreamInterface> */
+            public array $created = [];
+            public function __construct(private readonly Psr17Factory $factory) {}
+            public function createStream(string $content = ''): StreamInterface
+            {
+                return $this->factory->createStream($content);
+            }
+            public function createStreamFromFile(string $filename, string $mode = 'r'): StreamInterface
+            {
+                return $this->factory->createStreamFromFile($filename, $mode);
+            }
+            public function createStreamFromResource($resource): StreamInterface
+            {
+                $stream = $this->factory->createStreamFromResource($resource);
+                $this->created[] = $stream;
+                return $stream;
+            }
+        };
+        $body = "--b\r\nContent-Disposition: form-data; name=file; filename=data.bin\r\n\r\nDATA\r\n"
+            . "--b\r\nContent-Disposition: form-data; name=broken\r\n\r\nno closing boundary";
+        $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', 'multipart/form-data; boundary=b')
+            ->withBody($factory->createStream($body));
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                throw new \LogicException('Malformed multipart must not reach the handler.');
+            }
+        };
+        $middleware = new BodyParsingMiddleware($streams, $factory, responseFactory: $factory);
+        self::assertSame(400, $middleware->process($request, $handler)->getStatusCode());
+        self::assertCount(1, $streams->created);
+        self::assertFalse($streams->created[0]->isReadable());
+        self::assertSame(0, $request->getBody()->tell());
+    }
+
+    public function testExtraCarriageReturnInMultipartHeaderIsRejected(): void
+    {
+        $this->expectException(BodyParsingException::class);
+        (new MultipartParser())->parse("--b\r\nContent-Disposition: form-data; name=x\r\r\n\r\nabc\r\n--b--\r\n", 'b');
     }
 }
