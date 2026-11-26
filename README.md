@@ -6,7 +6,7 @@ Use this package in HTTP applications that need parsed bodies for methods and co
 
 ## Installation
 
-Requires PHP 8.4+ with the mbstring extension for filename encoding conversion.
+Requires PHP 8.4+ with mbstring and ctype. The Composer dependency constraint permits Config 3 and 4.
 
 ```bash
 composer require componenta/http-body-parsing-middleware
