@@ -207,7 +207,7 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
                 if ($size > $this->limits->maxBodyBytes) {
                     throw BodyParsingException::tooLarge('Request body exceeds configured limit.');
                 }
-                if ($chunk !== '' && fwrite($resource, $chunk) !== strlen($chunk)) {
+                if (fwrite($resource, $chunk) !== strlen($chunk)) {
                     throw new \RuntimeException('Could not write request replay stream.');
                 }
             }
