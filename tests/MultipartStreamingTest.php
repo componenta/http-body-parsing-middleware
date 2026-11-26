@@ -53,6 +53,32 @@ final class MultipartStreamingTest extends TestCase
         self::assertSame(strlen($body), $offset);
     }
 
+    #[DataProvider('chunkWidths')]
+    public function testHeaderByteLimitIsIndependentOfTerminatorChunkBoundaries(int $width): void
+    {
+        $factory = new Psr17Factory();
+        $header = "Content-Disposition: form-data; name=x\r\n";
+        $body = "--b\r\n" . $header . "\r\nabc\r\n--b--\r\n";
+        $offset = 0;
+        $source = $this->createStub(StreamInterface::class);
+        $source->method('read')->willReturnCallback(static function (int $length) use (&$offset, $body, $width): string {
+            $chunk = substr($body, $offset, min($length, $width));
+            $offset += strlen($chunk);
+            return $chunk;
+        });
+        $source->method('eof')->willReturnCallback(static function () use (&$offset, $body): bool {
+            return $offset >= strlen($body);
+        });
+        $limits = new BodyParsingLimits(maxHeaderBytes: strlen($header));
+        $parts = [];
+        foreach ((new MultipartParser($limits))->parseStream($source, 'b', $factory, $limits) as [$part, $stream]) {
+            $parts[] = [$part->getName(), $stream->getContents()];
+            $stream->close();
+        }
+        self::assertSame([['x', 'abc']], $parts);
+        self::assertSame(strlen($body), $offset);
+    }
+
     public function testEpilogueCountsTowardBodyLimit(): void
     {
         $factory = new Psr17Factory();
