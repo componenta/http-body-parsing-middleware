@@ -74,7 +74,7 @@ final class MultipartContractTest extends TestCase
     public static function malformedParts(): iterable
     {
         $header = "Content-Disposition: form-data; name=x";
-        yield 'no opening' => ["prefix--b\r\n" . $header . "\r\n\r\nabc\r\n--b--"];
+        yield 'no opening' => ["prefix--b\r\n" . $header . "\r\n\r\nabc\r\nsuffix--b--"];
         yield 'no closing' => ["--b\r\n" . $header . "\r\n\r\nabc"];
         yield 'invalid close suffix' => ["--b\r\n" . $header . "\r\n\r\nabc\r\n--b--x"];
         yield 'missing terminator' => ["--b\r\n" . $header . "\r\nabc\r\n--b--"];
@@ -100,6 +100,7 @@ final class MultipartContractTest extends TestCase
     {
         $parser = new MultipartParser();
         self::assertSame([], $parser->parse("--b--", 'b'));
+        self::assertSame([], $parser->parse("preamble--b\r\n--b--\r\n", 'b'));
         $parts = $parser->parse("preamble\n--b\nContent-Disposition: form-data; name=x\n\nabc\n--b--\nepilogue", 'b');
         self::assertCount(1, $parts);
         self::assertSame('abc', $parts[0]->getDecodedBody());
