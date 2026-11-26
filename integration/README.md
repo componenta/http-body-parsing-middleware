@@ -3,7 +3,7 @@
 The workflow installs the current Body Parsing revision with the following public repository snapshots:
 
 - `componenta/di` — `e203077d12048936f078d37d1cf3badd661e1716`
-- `componenta/http-csrf-middleware` — `cbec1c34065de996f20307ce1103169f77420837`
+- `componenta/http-csrf-middleware` — `4b280eecc25544757f63ead2563dfa3691e1cde3`
 - `componenta/http-cors-middleware` — `c0064ae459dc0706e2e2d798644c64c5d7489290`
 - `componenta/http-throttle-middleware` — `4c6ec261969a4f8d1df75250ceb10be38527bfeb`
 - `componenta/http-trusted-proxy-middleware` — `2ce4d7061b9c5e4fc35d86a0e49731a2c20eee07`

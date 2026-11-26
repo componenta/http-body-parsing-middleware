@@ -79,6 +79,17 @@ final class MultipartStreamingTest extends TestCase
         self::assertSame(strlen($body), $offset);
     }
 
+    public function testStreamingApiRejectsInvalidBoundaryEvenWhenDelimitersMatch(): void
+    {
+        $factory = new Psr17Factory();
+        $boundary = str_repeat('a', 71);
+        $body = '--' . $boundary . "\r\nContent-Disposition: form-data; name=x\r\n\r\nabc\r\n--" . $boundary . "--\r\n";
+        $this->expectException(BodyParsingException::class);
+        iterator_to_array((new MultipartParser())->parseStream(
+            $factory->createStream($body), $boundary, $factory, new BodyParsingLimits(),
+        ));
+    }
+
     public function testEpilogueCountsTowardBodyLimit(): void
     {
         $factory = new Psr17Factory();

@@ -58,6 +58,49 @@ final class MultipartContractTest extends TestCase
         (new MultipartParser())->extractBoundary($header);
     }
 
+    public function testStringApiPreservesAllPartsAcrossMultipleInternalReads(): void
+    {
+        $binary = str_repeat("\0abc\r\n--bX\r\n", 1200);
+        $body = "--b\r\nContent-Disposition: form-data; name=first\r\n\r\none\r\n"
+            . "--b\r\nContent-Disposition: form-data; name=file; filename=data.bin\r\n\r\n"
+            . $binary . "\r\n"
+            . "--b\r\nContent-Disposition: form-data; name=last\r\n\r\nthree\r\n"
+            . "--b--\r\n";
+        $parts = (new MultipartParser())->parse($body, 'b');
+
+        self::assertCount(3, $parts);
+        self::assertSame('first', $parts[0]->getName());
+        self::assertSame('one', $parts[0]->body);
+        self::assertSame('file', $parts[1]->getName());
+        self::assertSame('data.bin', $parts[1]->getFilename());
+        self::assertSame($binary, $parts[1]->body);
+        self::assertSame('last', $parts[2]->getName());
+        self::assertSame('three', $parts[2]->body);
+    }
+
+    public static function invalidDirectBoundaries(): iterable
+    {
+        foreach (['', str_repeat('a', 71), "b\n", "b\r", 'b ', 'b@'] as $boundary) {
+            yield [$boundary];
+        }
+    }
+
+    #[DataProvider('invalidDirectBoundaries')]
+    public function testStringApiRejectsInvalidBoundaryEvenWhenDelimitersMatch(string $boundary): void
+    {
+        $body = '--' . $boundary . "\r\nContent-Disposition: form-data; name=x\r\n\r\nabc\r\n--" . $boundary . "--\r\n";
+        $this->expectException(BodyParsingException::class);
+        (new MultipartParser())->parse($body, $boundary);
+    }
+
+    public function testQuotedExtensionMayContainHorizontalTabAndTildeButNotDel(): void
+    {
+        $parser = new MultipartParser();
+        self::assertSame('b', $parser->extractBoundary("multipart/form-data; boundary=b; ext=\"a\t~b\""));
+        $this->expectException(BodyParsingException::class);
+        $parser->extractBoundary("multipart/form-data; boundary=b; ext=\"a\x7fb\"");
+    }
+
     public function testCaseInsensitiveHeadersFoldedParametersAndBinaryContent(): void
     {
         $body = "--b\r\nCONTENT-DISPOSITION: FORM-DATA;\r\n\tNAME = \"a;b\"; FILENAME = \"a\\\"b.txt\"\r\n"

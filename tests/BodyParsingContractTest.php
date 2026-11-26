@@ -83,6 +83,22 @@ final class BodyParsingContractTest extends TestCase
         self::assertSame(['a' => 1], $handler->request?->getParsedBody());
     }
 
+    public function testJsonDepthExceptionPreservesOriginalCauseWithoutResponseFactory(): void
+    {
+        $factory = new Psr17Factory();
+        $middleware = new BodyParsingMiddleware($factory, $factory, limits: new BodyParsingLimits(maxNestingDepth: 2));
+        $request = $factory->createServerRequest('POST', '/')->withHeader('Content-Type', 'application/json')
+            ->withBody($factory->createStream('{"a":{"b":1}}'));
+        try {
+            $middleware->process($request, $this->handler());
+            self::fail('Exceeded JSON nesting limit was accepted.');
+        } catch (BodyParsingException $exception) {
+            self::assertSame(413, $exception->status);
+            self::assertInstanceOf(\JsonException::class, $exception->getPrevious());
+            self::assertSame(JSON_ERROR_DEPTH, $exception->getPrevious()->getCode());
+        }
+    }
+
     public function testMalformedJsonIsTypedExceptionWithoutResponseFactory(): void
     {
         $factory = new Psr17Factory();

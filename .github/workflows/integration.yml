@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: componenta/http-csrf-middleware
-          ref: cbec1c34065de996f20307ce1103169f77420837
+          ref: 4b280eecc25544757f63ead2563dfa3691e1cde3
           path: integration-deps/http-csrf-middleware
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
