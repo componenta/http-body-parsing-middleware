@@ -6,6 +6,7 @@ namespace Componenta\Http\Middleware;
 
 use Psr\Container\ContainerInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\UploadedFileFactoryInterface;
 
 class BodyParsingConfigProvider extends \Componenta\Config\ConfigProvider
@@ -17,6 +18,7 @@ class BodyParsingConfigProvider extends \Componenta\Config\ConfigProvider
                 return new BodyParsingMiddleware(
                     $container->get(StreamFactoryInterface::class),
                     $container->get(UploadedFileFactoryInterface::class),
+                    responseFactory: $container->get(ResponseFactoryInterface::class),
                 );
             },
         ];

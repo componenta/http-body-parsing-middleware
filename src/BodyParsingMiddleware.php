@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Componenta\Http\Middleware;
 
-use JsonException;
 use Componenta\Http\Middleware\Body\MultipartParser;
 use Componenta\Http\Middleware\Body\MultipartPart;
+use JsonException;
+use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -15,235 +16,134 @@ use Psr\Http\Message\UploadedFileInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
-/**
- * Parses request bodies for methods where PHP does not natively populate
- * $_POST and $_FILES (PUT, PATCH, DELETE), as well as POST requests
- * with content types that PHP does not handle (e.g., application/json).
- *
- * Supported content types:
- *
- * - application/json                (RFC 8259)
- * - application/x-www-form-urlencoded (WHATWG URL Standard §5)
- * - multipart/form-data             (RFC 7578, RFC 2046)
- *
- * @see RFC 9110 §6.4.1 - Associating a Body with a Method
- * @see RFC 9110 §8.3   - Content-Type
- */
-final class BodyParsingMiddleware implements MiddlewareInterface
+final readonly class BodyParsingMiddleware implements MiddlewareInterface
 {
-    /** @var array<string, callable(ServerRequestInterface): ServerRequestInterface> */
-    private array $parsers;
+    /** Root JSON kind; distinguishes scalar wrappers from user objects. */
+    public const string ATTR_JSON_KIND = 'componenta.body-parsing.json-kind';
 
-    /**
-     * Content types that PHP natively parses for POST requests.
-     *
-     * PHP populates $_POST and $_FILES for these types on POST only.
-     * We skip these combinations to avoid double-parsing.
-     *
-     * @see https://www.php.net/manual/en/ini.core.php#ini.enable-post-data-reading
-     */
-    private const array PHP_NATIVE_POST_TYPES = [
-        'application/x-www-form-urlencoded',
-        'multipart/form-data',
-    ];
+    private MultipartParser $multipartParser;
 
     public function __construct(
-        private readonly StreamFactoryInterface $streamFactory,
-        private readonly UploadedFileFactoryInterface $uploadedFileFactory,
-        private readonly MultipartParser $multipartParser = new MultipartParser(),
+        private StreamFactoryInterface $streamFactory,
+        private UploadedFileFactoryInterface $uploadedFileFactory,
+        ?MultipartParser $multipartParser = null,
+        private BodyParsingLimits $limits = new BodyParsingLimits(),
+        private ?ResponseFactoryInterface $responseFactory = null,
     ) {
-        $this->parsers = [
-            'application/json' => $this->parseJson(...),
-            'application/x-www-form-urlencoded' => $this->parseFormUrlEncoded(...),
-            'multipart/form-data' => $this->parseMultipart(...),
-        ];
+        $this->multipartParser = $multipartParser ?? new MultipartParser($limits);
     }
 
+    #[\Override]
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        if ($this->shouldSkip($request)) {
+        if ($request->getParsedBody() !== null || in_array($request->getMethod(), ['GET', 'HEAD', 'OPTIONS', 'TRACE'], true)) {
             return $handler->handle($request);
         }
-
-        $mediaType = $this->extractMediaType($request->getHeaderLine('Content-Type'));
-
-        foreach ($this->parsers as $type => $parser) {
-            if ($mediaType === $type) {
-                $request = $parser($request);
-                break;
-            }
+        $mediaType = strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0]));
+        if (!in_array($mediaType, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'], true)
+            || ($mediaType === 'multipart/form-data' && $request->getUploadedFiles() !== [])) {
+            return $handler->handle($request);
         }
-
+        try {
+            if (count($request->getHeader('Content-Type')) !== 1) {
+                throw BodyParsingException::malformed('Ambiguous Content-Type.');
+            }
+            [$request, $body] = $this->readBody($request);
+            if ($body !== '') {
+                $request = match ($mediaType) {
+                    'application/json' => $this->parseJson($request, $body),
+                    'application/x-www-form-urlencoded' => $this->parseForm($request, $body),
+                    'multipart/form-data' => $this->parseMultipart($request, $body),
+                };
+            }
+        } catch (BodyParsingException $exception) {
+            if ($this->responseFactory === null) {
+                throw $exception;
+            }
+            return $this->responseFactory->createResponse($exception->status)
+                ->withHeader('Cache-Control', 'no-store');
+        }
         return $handler->handle($request);
     }
 
-    /**
-     * Determines whether body parsing should be skipped.
-     *
-     * Skips if:
-     * - Body already parsed (getParsedBody() !== null)
-     * - Method has no defined body semantics per RFC 9110 §9
-     * - PHP already natively parsed this POST request (form-urlencoded / multipart)
-     */
-    private function shouldSkip(ServerRequestInterface $request): bool
+    private function parseJson(ServerRequestInterface $request, string $body): ServerRequestInterface
     {
-        if ($request->getParsedBody() !== null) {
-            return true;
+        try {
+            $data = json_decode($body, true, $this->limits->maxNestingDepth, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
+        } catch (JsonException $exception) {
+            throw BodyParsingException::malformed('Invalid JSON request body.', $exception);
         }
+        $kind = match (ltrim($body, " \t\r\n")[0] ?? '') {
+            '{' => 'object',
+            '[' => 'array',
+            default => 'scalar',
+        };
+        return $request
+            ->withParsedBody(is_array($data) ? $data : ['__scalar' => $data])
+            ->withAttribute(self::ATTR_JSON_KIND, $kind);
+    }
 
-        // RFC 9110 §9.3.1/§9.3.5: These methods have no defined body semantics
-        if (in_array($request->getMethod(), ['GET', 'HEAD', 'OPTIONS', 'TRACE'], true)) {
-            return true;
+    private function parseForm(ServerRequestInterface $request, string $body): ServerRequestInterface
+    {
+        $separators = ini_get('arg_separator.input') ?: '&';
+        $fields = preg_split('/[' . preg_quote($separators, '/') . ']/', $body);
+        if ($fields === false) {
+            throw BodyParsingException::malformed('Invalid form body.');
         }
-
-        // PHP natively parses form-urlencoded and multipart for POST.
-        // The body stream (php://input) is empty for multipart POST,
-        // so re-parsing would yield nothing. We skip only these specific
-        // combinations; other POST content types (e.g., JSON) are parsed.
-        if ($request->getMethod() === 'POST') {
-            $mediaType = $this->extractMediaType($request->getHeaderLine('Content-Type'));
-
-            if (array_any(self::PHP_NATIVE_POST_TYPES, static fn($type) => $mediaType === $type)) {
-                return true;
+        $nativeMax = (int) ini_get('max_input_vars');
+        $nativeDepth = (int) ini_get('max_input_nesting_level');
+        if (count($fields) > $this->limits->maxParts || ($nativeMax > 0 && count($fields) > $nativeMax)) {
+            throw BodyParsingException::tooLarge('Too many form fields.');
+        }
+        foreach ($fields as $field) {
+            $name = urldecode(explode('=', $field, 2)[0]);
+            if (str_contains($name, "\0")) {
+                throw BodyParsingException::malformed('Invalid form field name.');
+            }
+            $depth = substr_count($name, '[');
+            if ($depth > $this->limits->maxNestingDepth || ($nativeDepth > 0 && $depth > $nativeDepth)) {
+                throw BodyParsingException::tooLarge('Form nesting exceeds configured limit.');
             }
         }
-
-        return false;
-    }
-
-    /**
-     * Parses an application/json request body.
-     *
-     * Per RFC 8259 §8.1, JSON text MUST be encoded using UTF-8.
-     * Per RFC 8259 §2, a JSON text is a serialized value which can be
-     * an object, array, number, string, or one of the literals.
-     *
-     * PSR-7's withParsedBody() accepts null|array|object. For scalar
-     * JSON values (string, number, boolean) and null, we store the
-     * decoded value under the "__scalar" key to preserve the data
-     * while remaining PSR-7 compliant. Consumers should check for
-     * this key when expecting non-object/array JSON payloads.
-     *
-     * @see RFC 8259 - The JavaScript Object Notation (JSON) Data Interchange Format
-     *
-     * @throws JsonException If the body contains invalid JSON
-     */
-    private function parseJson(ServerRequestInterface $request): ServerRequestInterface
-    {
-        $body = $this->readBody($request);
-
-        if ($body === '') {
-            return $request;
-        }
-
-        $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-
-        // PSR-7 withParsedBody() accepts null|array|object.
-        // Wrap scalar values to stay compliant while preserving data.
-        if (!is_array($data)) {
-            $data = ['__scalar' => $data];
-        }
-
-        return $request->withParsedBody($data);
-    }
-
-    /**
-     * Parses an application/x-www-form-urlencoded request body.
-     *
-     * Uses PHP's parse_str() which follows the WHATWG URL Standard §5
-     * for parsing application/x-www-form-urlencoded data, including
-     * support for nested keys (e.g., foo[bar]=baz).
-     *
-     * @see https://url.spec.whatwg.org/#urlencoded-parsing
-     */
-    private function parseFormUrlEncoded(ServerRequestInterface $request): ServerRequestInterface
-    {
-        $body = $this->readBody($request);
-
-        if ($body === '') {
-            return $request;
-        }
-
         parse_str($body, $data);
-
         return $request->withParsedBody($data);
     }
 
-    /**
-     * Parses a multipart/form-data request body.
-     *
-     * Delegates to MultipartParser for RFC 2046/7578 compliant parsing,
-     * then maps the parsed parts to PSR-7 parsed body and uploaded files.
-     *
-     * Per RFC 7578 §4.3, multiple files with the same name are supported.
-     * Per RFC 7578 §4.4, the Content-Type of each file part defaults
-     * to "text/plain" if not specified.
-     *
-     * @see RFC 7578 - Returning Values from Forms: multipart/form-data
-     * @see RFC 2046 §5.1 - Multipart Media Type
-     */
-    private function parseMultipart(ServerRequestInterface $request): ServerRequestInterface
+    private function parseMultipart(ServerRequestInterface $request, string $body): ServerRequestInterface
     {
-        $contentType = $request->getHeaderLine('Content-Type');
-        $boundary = $this->multipartParser->extractBoundary($contentType);
-
+        $boundary = $this->multipartParser->extractBoundary($request->getHeaderLine('Content-Type'));
         if ($boundary === null) {
-            return $request;
+            throw BodyParsingException::malformed('Multipart boundary is required.');
         }
-
-        $body = $this->readBody($request);
-
-        if ($body === '') {
-            return $request;
-        }
-
         $parts = $this->multipartParser->parse($body, $boundary);
-
-        $params = [];
+        if (count($parts) > $this->limits->maxParts) {
+            throw BodyParsingException::tooLarge('Too many multipart parts.');
+        }
+        $fields = [];
         $files = [];
-
         foreach ($parts as $part) {
             $name = $part->getName();
-
             if ($name === null) {
-                // RFC 7578 §4.2: name parameter is required, skip invalid parts
-                continue;
+                throw BodyParsingException::malformed('Multipart field name is required.');
             }
-
+            $decoded = $part->getDecodedBody();
+            if (strlen($decoded) > $this->limits->maxPartBytes) {
+                throw BodyParsingException::tooLarge('Multipart part exceeds configured limit.');
+            }
             if ($part->isFile()) {
-                $this->assignNestedValue(
-                    $files,
-                    $name,
-                    $this->createUploadedFile($part),
-                );
+                $this->assign($files, $name, $this->createUpload($part, $decoded), true);
             } else {
-                // RFC 7578 §5.1: text field values use the decoded body
-                $this->assignNestedValue($params, $name, $part->getDecodedBody());
+                $this->assign($fields, $name, $decoded, false);
             }
         }
-
-        $request = $request->withParsedBody($params !== [] ? $params : null);
-
-        if ($files !== []) {
-            $request = $request->withUploadedFiles($files);
-        }
-
-        return $request;
+        $request = $request->withParsedBody($fields);
+        return $files === [] ? $request : $request->withUploadedFiles($files);
     }
 
-    /**
-     * Creates a PSR-7 UploadedFile from a parsed multipart part.
-     *
-     * Per RFC 7578 §4.4, the default Content-Type for file parts
-     * is "text/plain" if no Content-Type header is present.
-     * MultipartPart::getContentType() returns this default.
-     */
-    private function createUploadedFile(MultipartPart $part): UploadedFileInterface
+    private function createUpload(MultipartPart $part, string $data): UploadedFileInterface
     {
-        $body = $part->getDecodedBody();
-        $stream = $this->streamFactory->createStream($body);
         $filename = $part->getFilename();
-
+        $stream = $this->streamFactory->createStream($data);
         return $this->uploadedFileFactory->createUploadedFile(
             $stream,
             $stream->getSize(),
@@ -253,107 +153,87 @@ final class BodyParsingMiddleware implements MiddlewareInterface
         );
     }
 
-    /**
-     * Safely reads the request body stream.
-     *
-     * PSR-7 streams may not be rewindable, and a prior middleware
-     * may have already consumed the stream. We attempt to rewind
-     * before reading to handle this case gracefully.
-     *
-     * @see PSR-7 §1.3 - Streams
-     */
-    private function readBody(ServerRequestInterface $request): string
+    /** @return array{ServerRequestInterface, string} */
+    private function readBody(ServerRequestInterface $request): array
     {
-        $body = $request->getBody();
-
-        if ($body->isSeekable()) {
-            $body->rewind();
+        $stream = $request->getBody();
+        $size = $stream->getSize();
+        if ($size !== null && $size > $this->limits->maxBodyBytes) {
+            throw BodyParsingException::tooLarge('Request body exceeds configured limit.');
         }
-
-        return $body->getContents();
+        $position = null;
+        if ($stream->isSeekable()) {
+            $position = $stream->tell();
+            $stream->rewind();
+        }
+        $body = '';
+        try {
+            while (!$stream->eof()) {
+                $remaining = $this->limits->maxBodyBytes - strlen($body);
+                $chunk = $stream->read(min(8192, $remaining + 1));
+                if ($chunk === '' && !$stream->eof()) {
+                    throw BodyParsingException::malformed('Request body stream made no progress.');
+                }
+                $body .= $chunk;
+                if (strlen($body) > $this->limits->maxBodyBytes) {
+                    throw BodyParsingException::tooLarge('Request body exceeds configured limit.');
+                }
+            }
+        } finally {
+            if ($position !== null) {
+                $stream->seek($position);
+            }
+        }
+        if ($position === null) {
+            $request = $request->withBody($this->streamFactory->createStream($body));
+        }
+        return [$request, $body];
     }
 
-    /**
-     * Extracts the media type (type/subtype) from a Content-Type header.
-     *
-     * Per RFC 9110 §8.3.1:
-     *   Content-Type = media-type
-     *   media-type   = type "/" subtype *( OWS ";" OWS parameter )
-     *
-     * This strips parameters (like charset) and normalizes to lowercase
-     * for reliable comparison. Prevents false matches like
-     * "application/json-patch+json" matching "application/json".
-     */
-    private function extractMediaType(string $contentType): string
-    {
-        $semicolonPos = strpos($contentType, ';');
-
-        if ($semicolonPos !== false) {
-            $contentType = substr($contentType, 0, $semicolonPos);
-        }
-
-        return strtolower(trim($contentType));
-    }
-
-    /**
-     * Assigns a value into a nested array using PHP's bracket notation.
-     *
-     * Supports field names like:
-     * - "simple"         -> $target['simple'] = $value
-     * - "arr[]"          -> $target['arr'][] = $value
-     * - "nested[a][b]"  -> $target['nested']['a']['b'] = $value
-     *
-     * This mirrors PHP's native behavior for $_POST and $_FILES.
-     */
-    private function assignNestedValue(array &$target, string $name, mixed $value): void
+    /** @param array<array-key, mixed> $target */
+    private function assign(array &$target, string $name, mixed $value, bool $upload): void
     {
         $name = ltrim($name, ' ');
         if ($name === '') {
             return;
         }
-
-        if (!str_contains($name, '[')) {
-            $target[strtr($name, '. ', '__')] = $value;
-
-            return;
+        if (preg_match('/[\x00-\x1f\x7f]/', $name) === 1
+            || preg_match('/^([^\[\]]+)((?:\[[^\[\]]*\])*)$/D', $name, $parts) !== 1) {
+            throw BodyParsingException::malformed('Invalid multipart field name.');
         }
-
-        // Extract base name before first [
-        if (!preg_match('/^([^[]+)/', $name, $base)) {
-            // Name starts with [ (e.g., "[weird]") - invalid per HTML spec,
-            // skip silently to match PHP's $_POST behavior which also ignores these
-            return;
+        preg_match_all('/\[([^\[\]]*)\]/', $parts[2], $matches);
+        $keys = [strtr($parts[1], '. ', '__'), ...$matches[1]];
+        if (count($keys) - 1 > $this->limits->maxNestingDepth) {
+            throw BodyParsingException::tooLarge('Multipart nesting exceeds configured limit.');
         }
-
-        $base[1] = strtr($base[1], '. ', '__');
-        preg_match_all('/\[([^]]*)]/', $name, $keys);
-
+        $leaf = array_pop($keys);
         $current = &$target;
-
-        if (!isset($current[$base[1]]) || !is_array($current[$base[1]])) {
-            $current[$base[1]] = [];
-        }
-
-        $current = &$current[$base[1]];
-
-        foreach ($keys[1] as $key) {
-            if (!is_array($current)) {
-                $current = [];
-            }
-
+        foreach ($keys as $key) {
             if ($key === '') {
-                $current[] = null;
-                end($current);
-                $key = key($current);
+                $current[] = [];
+                $key = array_key_last($current);
             }
-
+            if (isset($current[$key]) && !is_array($current[$key]) && $upload) {
+                throw BodyParsingException::malformed('Conflicting multipart upload field shapes.');
+            }
             if (!isset($current[$key]) || !is_array($current[$key])) {
                 $current[$key] = [];
             }
-
             $current = &$current[$key];
         }
-
-        $current = $value;
+        if ($leaf === '') {
+            $current[] = $value;
+        } elseif ($upload && isset($current[$leaf])) {
+            $existing = $current[$leaf];
+            if ($existing instanceof UploadedFileInterface) {
+                $current[$leaf] = [$existing, $value];
+            } elseif (is_array($existing) && array_is_list($existing) && array_all($existing, static fn(mixed $item): bool => $item instanceof UploadedFileInterface)) {
+                $current[$leaf][] = $value;
+            } else {
+                throw BodyParsingException::malformed('Conflicting multipart upload field shapes.');
+            }
+        } else {
+            $current[$leaf] = $value;
+        }
     }
 }
