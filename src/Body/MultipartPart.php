@@ -74,6 +74,8 @@ final readonly class MultipartPart
             if (!mb_check_encoding($decoded, $parts[0])) {
                 throw BodyParsingException::malformed('Invalid extended multipart filename encoding.');
             }
+            // PHP documents false on conversion failure; older PHPStan stubs narrow this to string.
+            /** @var string|false $converted */
             $converted = mb_convert_encoding($decoded, 'UTF-8', $parts[0]);
             if ($converted === false) {
                 throw BodyParsingException::malformed('Could not convert extended multipart filename.');
