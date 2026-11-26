@@ -82,6 +82,9 @@ final readonly class BodyParsingMiddleware implements MiddlewareInterface
         try {
             $data = json_decode($body, true, $this->limits->maxNestingDepth, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
         } catch (JsonException $exception) {
+            if ($exception->getCode() === JSON_ERROR_DEPTH) {
+                throw BodyParsingException::tooLarge('JSON nesting exceeds configured limit.', $exception);
+            }
             throw BodyParsingException::malformed('Invalid JSON request body.', $exception);
         }
         $kind = match (ltrim($body, " \t\r\n")[0] ?? '') {

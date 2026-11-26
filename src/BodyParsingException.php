@@ -16,8 +16,8 @@ final class BodyParsingException extends \RuntimeException
         return new self(400, $message, $previous);
     }
 
-    public static function tooLarge(string $message): self
+    public static function tooLarge(string $message, ?\Throwable $previous = null): self
     {
-        return new self(413, $message);
+        return new self(413, $message, $previous);
     }
 }

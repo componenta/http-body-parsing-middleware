@@ -56,3 +56,5 @@ Raw supported bodies are read in bounded chunks (default 8 MiB), including POST 
 Malformed input produces `BodyParsingException` (400) or a limit failure (413). Supply `responseFactory:` to convert these into responses; the config provider supplies it by default. Already parsed data is trusted and must have been bounded by its producer. Multipart files with repeated field names are preserved as lists. Incomplete multipart messages and malformed/duplicate header parameters are rejected. Bare LF and deprecated transfer encodings/extended filenames are supported only for compatibility. Treat client filenames and media types as untrusted metadata. This package does not validate uploaded file contents.
 
 Multipart failures release already created upload and replay streams before returning an error. An empty filename with non-empty content is rejected. PHP form limits of zero are enforced rather than treated as unlimited; negative native limits do not disable the package's own limits.
+
+JSON nesting exhaustion is a configured resource-limit failure (413), while JSON syntax errors return 400. The original `JsonException` is retained as the cause.
