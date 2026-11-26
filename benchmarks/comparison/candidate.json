@@ -1,0 +1,4 @@
+{
+    "runner.bootstrap": "bootstrap-candidate.php",
+    "runner.path": "subjects"
+}

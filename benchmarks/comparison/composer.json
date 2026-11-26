@@ -1,0 +1,23 @@
+{
+    "name": "componenta/http-middleware-comparison-fixture",
+    "description": "Common PHPBench scenarios for pinned middleware revisions",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.5.13",
+        "nyholm/psr7": "^1.8.2",
+        "psr/http-factory": "^1.1",
+        "psr/http-server-middleware": "^1.0",
+        "psr/http-server-handler": "^1.0",
+        "psr/simple-cache": "^3.0",
+        "phpbench/phpbench": "^1.7"
+    },
+    "config": {
+        "audit": {
+            "ignore-abandoned": {
+                "doctrine/annotations": "PHPBench-only dependency; benchmark discovery uses PHP attributes. Security advisories remain enforced."
+            }
+        }
+    },
+    "minimum-stability": "stable"
+}

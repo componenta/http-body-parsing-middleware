@@ -1,0 +1,95 @@
+name: Comparative PHPBench
+
+on:
+  push:
+    branches:
+      - fix/middleware-security-audit
+    paths:
+      - 'benchmarks/comparison/**'
+      - '.github/workflows/comparison.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-csrf-middleware
+          ref: 10027095973eda5c86b4b2ef8886f8dae98f0af8
+          path: comparison-sources/baseline/http-csrf-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-csrf-middleware
+          ref: cbec1c34065de996f20307ce1103169f77420837
+          path: comparison-sources/candidate/http-csrf-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-cors-middleware
+          ref: 4abd5e18727c3bb45b577fc82dc156be575c8320
+          path: comparison-sources/baseline/http-cors-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-cors-middleware
+          ref: c0064ae459dc0706e2e2d798644c64c5d7489290
+          path: comparison-sources/candidate/http-cors-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-trusted-proxy-middleware
+          ref: eb9c9a654093b4f4b8e9c08aa368786e47f17d9b
+          path: comparison-sources/baseline/http-trusted-proxy-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-trusted-proxy-middleware
+          ref: 2ce4d7061b9c5e4fc35d86a0e49731a2c20eee07
+          path: comparison-sources/candidate/http-trusted-proxy-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-throttle-middleware
+          ref: 6fcbcc624cadfaf12166f6d025f902532696f0e7
+          path: comparison-sources/baseline/http-throttle-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-throttle-middleware
+          ref: 4c6ec261969a4f8d1df75250ceb10be38527bfeb
+          path: comparison-sources/candidate/http-throttle-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-body-parsing-middleware
+          ref: c054ef93269c1540e963a6a2c4e069f1b398b3b5
+          path: comparison-sources/baseline/http-body-parsing-middleware
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: componenta/http-body-parsing-middleware
+          ref: f3fb7ec2c697dc121917348a215165489e9db463
+          path: comparison-sources/candidate/http-body-parsing-middleware
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.5'
+          coverage: none
+          extensions: mbstring, ctype, dom
+          tools: composer:2.9.8@sha256:59b2c50e10cafa0d8efc19ede9a326d782f096c674a26baf98cf042ce23de890
+      - run: composer update --working-dir=benchmarks/comparison --no-interaction --prefer-dist --no-progress
+      - run: composer audit --working-dir=benchmarks/comparison
+      - name: Baseline
+        working-directory: benchmarks/comparison
+        run: vendor/bin/phpbench run --config=baseline.json --report=aggregate --report=env
+      - name: Candidate
+        working-directory: benchmarks/comparison
+        run: vendor/bin/phpbench run --config=candidate.json --report=aggregate --report=env

@@ -1,0 +1,4 @@
+{
+    "runner.bootstrap": "bootstrap-baseline.php",
+    "runner.path": "subjects"
+}

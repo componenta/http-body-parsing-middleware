@@ -8,3 +8,6 @@ integration/composer.lock
 /integration-deps/
 /integration/vendor/
 /integration/composer.lock
+/comparison-sources/
+/benchmarks/comparison/vendor/
+/benchmarks/comparison/composer.lock
