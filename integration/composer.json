@@ -1,0 +1,47 @@
+{
+    "name": "componenta/http-middleware-integration-fixture",
+    "description": "Isolated integration fixture for the middleware audit",
+    "type": "project",
+    "license": "MIT",
+    "repositories": [
+        {
+            "type": "path",
+            "url": "..",
+            "options": {
+                "symlink": true,
+                "versions": {
+                    "componenta/http-body-parsing-middleware": "dev-audit"
+                }
+            }
+        },
+        {
+            "type": "path",
+            "url": "../integration-deps/*",
+            "options": {
+                "symlink": true,
+                "versions": {
+                    "componenta/di": "6.0.x-dev",
+                    "componenta/http-csrf-middleware": "dev-audit",
+                    "componenta/http-cors-middleware": "dev-audit",
+                    "componenta/http-throttle-middleware": "dev-audit",
+                    "componenta/http-trusted-proxy-middleware": "dev-audit"
+                }
+            }
+        }
+    ],
+    "require": {
+        "php": "^8.5.13",
+        "componenta/config": "^4.0",
+        "componenta/di": "6.0.x-dev@dev",
+        "componenta/session": "^1.0",
+        "componenta/http-body-parsing-middleware": "dev-audit",
+        "nyholm/psr7": "^1.8.2",
+        "psr/http-factory": "^1.1",
+        "componenta/http-csrf-middleware": "dev-audit",
+        "componenta/http-cors-middleware": "dev-audit",
+        "componenta/http-throttle-middleware": "dev-audit",
+        "componenta/http-trusted-proxy-middleware": "dev-audit"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
