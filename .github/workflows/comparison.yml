@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: componenta/http-csrf-middleware
-          ref: cbec1c34065de996f20307ce1103169f77420837
+          ref: 3648984ab056e3005fe7ac24cc01d2060e5f4bbc
           path: comparison-sources/candidate/http-csrf-middleware
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: componenta/http-body-parsing-middleware
-          ref: f3fb7ec2c697dc121917348a215165489e9db463
+          ref: 56b4c0d834693b9b6030f83b39ebf8b221542321
           path: comparison-sources/candidate/http-body-parsing-middleware
           persist-credentials: false
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240

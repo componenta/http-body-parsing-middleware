@@ -13,7 +13,7 @@ use Componenta\Http\Middleware\BodyParsingConfigProvider;
 use Componenta\Http\Middleware\BodyParsingMiddleware;
 use Componenta\Http\Middleware\Cors\CorsConfiguration;
 use Componenta\Http\Middleware\Cors\CorsMiddleware;
-use Componenta\Http\Middleware\Csrf\ComponentaSessionCsrfTokenManager;
+use Componenta\Http\Middleware\Csrf\SessionCsrfTokenManager;
 use Componenta\Http\Middleware\Csrf\CsrfMiddleware;
 use Componenta\Http\Middleware\Throttle\FileRateLimiter;
 use Componenta\Http\Middleware\Throttle\ThrottleMiddleware;
@@ -82,7 +82,7 @@ function runIntegration(bool $targeted): void
                 new ThrottleMiddleware(new FileRateLimiter($directory, static fn(): int => 100),
                     $c->get(ResponseFactoryInterface::class), limit: 4, policy: 'integration'),
             CsrfMiddleware::class => static fn(ContainerInterface $c): CsrfMiddleware =>
-                new CsrfMiddleware(ComponentaSessionCsrfTokenManager::fromRequest(...),
+                new CsrfMiddleware(SessionCsrfTokenManager::fromRequest(...),
                     $c->get(ResponseFactoryInterface::class), exposeTokenManager: false),
         ];
         $assembly = new ContainerFactory();
